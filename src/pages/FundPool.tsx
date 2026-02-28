@@ -1,6 +1,6 @@
 import { useState, useCallback } from 'react'
 import { useAccount } from 'wagmi'
-import { useEIP7702, Recipient } from '../hooks/useEIP7702'
+import { useEIP7702, Recipient, validateRecipients } from '../hooks/useEIP7702'
 import { TransactionStatus } from '../components/TransactionStatus'
 
 interface PoolMember {
@@ -12,7 +12,7 @@ type DistMode = 'equal' | 'custom'
 
 export function FundPool() {
     const { isConnected } = useAccount()
-    const { txStatus, txHash, txError, executeBatch, buildNativeCalls, buildERC20Calls, reset, explorerUrl } = useEIP7702()
+    const { txStatus, txHash, txError, executeBatch, buildNativeCalls, buildERC20Calls, readTokenDecimals, reset, explorerUrl } = useEIP7702()
 
     const [poolName, setPoolName] = useState('')
     const [totalBudget, setTotalBudget] = useState('')
@@ -20,6 +20,7 @@ export function FundPool() {
     const [tokenType, setTokenType] = useState<'native' | 'erc20'>('native')
     const [tokenAddress, setTokenAddress] = useState('')
     const [distMode, setDistMode] = useState<DistMode>('equal')
+    const [validationError, setValidationError] = useState<string>()
     const [members, setMembers] = useState<PoolMember[]>([
         { address: '', share: '' },
         { address: '', share: '' },
@@ -35,6 +36,7 @@ export function FundPool() {
 
     const updateMember = (index: number, field: keyof PoolMember, value: string) => {
         setMembers(prev => prev.map((m, i) => i === index ? { ...m, [field]: value } : m))
+        setValidationError(undefined)
     }
 
     // Calculate distribution
@@ -47,19 +49,22 @@ export function FundPool() {
         : 0
 
     const getDistributionRecipients = useCallback((): Recipient[] => {
+        const currentValidMembers = members.filter(m => m.address)
+        const currentRemaining = Math.max(0, (parseFloat(totalBudget) || 0) - (parseFloat(usedAmount) || 0))
+
         if (distMode === 'equal') {
-            return validMembers.map(m => ({
+            const share = currentValidMembers.length > 0 ? currentRemaining / currentValidMembers.length : 0
+            return currentValidMembers.map(m => ({
                 address: m.address,
-                amount: perPerson.toString(),
+                amount: share.toString(),
             }))
         } else {
-            // Custom mode: member.share is the actual amount
-            return validMembers.map(m => ({
+            return currentValidMembers.map(m => ({
                 address: m.address,
                 amount: m.share || '0',
             }))
         }
-    }, [distMode, validMembers, perPerson])
+    }, [distMode, members, totalBudget, usedAmount])
 
     const customTotal = distMode === 'custom'
         ? validMembers.reduce((sum, m) => sum + (parseFloat(m.share) || 0), 0)
@@ -69,12 +74,21 @@ export function FundPool() {
         const distributionRecipients = getDistributionRecipients()
         if (distributionRecipients.length === 0) return
 
+        // Validate addresses
+        const error = validateRecipients(distributionRecipients)
+        if (error) {
+            setValidationError(error)
+            return
+        }
+        setValidationError(undefined)
+
         let calls
         if (tokenType === 'native') {
             calls = buildNativeCalls(distributionRecipients)
         } else {
             if (!tokenAddress) return
-            calls = buildERC20Calls(tokenAddress, distributionRecipients)
+            const decimals = await readTokenDecimals(tokenAddress)
+            calls = buildERC20Calls(tokenAddress, distributionRecipients, decimals)
         }
 
         await executeBatch(calls)
@@ -213,7 +227,10 @@ export function FundPool() {
                     {members.length > 1 && (
                         <button
                             className="btn btn--sm btn--danger"
-                            onClick={() => setMembers([{ address: '', share: '' }])}
+                            onClick={() => {
+                                setMembers([{ address: '', share: '' }])
+                                setValidationError(undefined)
+                            }}
                         >
                             Clear All
                         </button>
@@ -324,6 +341,19 @@ export function FundPool() {
                                     </span>
                                 </div>
                             ))}
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {/* Validation Error */}
+            {validationError && (
+                <div className="tx-status tx-status--error animate-in mb-lg">
+                    <div className="tx-status__icon">⚠</div>
+                    <div className="tx-status__content">
+                        <div className="tx-status__title">Validation Error</div>
+                        <div style={{ fontFamily: 'var(--font-mono)', fontSize: '0.75rem', color: 'var(--error)', marginTop: '4px' }}>
+                            {validationError}
                         </div>
                     </div>
                 </div>

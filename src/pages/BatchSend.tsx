@@ -1,11 +1,11 @@
 import { useState, useRef, useCallback } from 'react'
 import { useAccount } from 'wagmi'
-import { useEIP7702, Recipient } from '../hooks/useEIP7702'
+import { useEIP7702, Recipient, validateRecipients } from '../hooks/useEIP7702'
 import { TransactionStatus } from '../components/TransactionStatus'
 
 export function BatchSend() {
     const { isConnected } = useAccount()
-    const { txStatus, txHash, txError, executeBatch, buildNativeCalls, buildERC20Calls, reset, explorerUrl } = useEIP7702()
+    const { txStatus, txHash, txError, executeBatch, buildNativeCalls, buildERC20Calls, readTokenDecimals, reset, explorerUrl } = useEIP7702()
     const fileInputRef = useRef<HTMLInputElement>(null)
 
     const [tokenType, setTokenType] = useState<'native' | 'erc20'>('native')
@@ -15,6 +15,9 @@ export function BatchSend() {
         { address: '', amount: '' },
         { address: '', amount: '' },
     ])
+    const [validationError, setValidationError] = useState<string>()
+    const [csvInfo, setCsvInfo] = useState<string>()
+    const [isDragging, setIsDragging] = useState(false)
 
     const addRow = () => {
         setRecipients(prev => [...prev, { address: '', amount: '' }])
@@ -26,7 +29,40 @@ export function BatchSend() {
 
     const updateRecipient = (index: number, field: keyof Recipient, value: string) => {
         setRecipients(prev => prev.map((r, i) => i === index ? { ...r, [field]: value } : r))
+        setValidationError(undefined)
     }
+
+    const parseCSV = useCallback((text: string) => {
+        const lines = text.split('\n').filter(l => l.trim())
+
+        // Skip header row if it looks like one
+        const firstLine = lines[0]?.toLowerCase() || ''
+        const startIdx = (firstLine.includes('address') || firstLine.includes('wallet') || firstLine.includes('recipient'))
+            ? 1
+            : 0
+
+        const parsed: Recipient[] = []
+        const errors: string[] = []
+
+        for (let i = startIdx; i < lines.length; i++) {
+            const [address, amount] = lines[i].split(',').map(s => s.trim())
+            if (!address) continue
+
+            if (address && address.startsWith('0x') && address.length === 42) {
+                parsed.push({ address, amount: amount || '' })
+            } else {
+                errors.push(`Line ${i + 1}: Invalid address`)
+            }
+        }
+
+        if (parsed.length > 0) {
+            setRecipients(parsed)
+            setCsvInfo(`${parsed.length} recipients imported${errors.length > 0 ? `, ${errors.length} skipped` : ''}`)
+            setTimeout(() => setCsvInfo(undefined), 4000)
+        } else {
+            setValidationError('No valid recipients found in CSV')
+        }
+    }, [])
 
     const handleCSVImport = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
         const file = e.target.files?.[0]
@@ -35,20 +71,40 @@ export function BatchSend() {
         const reader = new FileReader()
         reader.onload = (event) => {
             const text = event.target?.result as string
-            const lines = text.split('\n').filter(l => l.trim())
-            const parsed: Recipient[] = lines.map(line => {
-                const [address, amount] = line.split(',').map(s => s.trim())
-                return { address: address || '', amount: amount || '' }
-            }).filter(r => r.address)
-
-            if (parsed.length > 0) {
-                setRecipients(parsed)
-            }
+            parseCSV(text)
         }
         reader.readAsText(file)
-        // Reset input
         if (fileInputRef.current) fileInputRef.current.value = ''
+    }, [parseCSV])
+
+    // Drag and drop handlers
+    const handleDragOver = useCallback((e: React.DragEvent) => {
+        e.preventDefault()
+        e.stopPropagation()
+        setIsDragging(true)
     }, [])
+
+    const handleDragLeave = useCallback((e: React.DragEvent) => {
+        e.preventDefault()
+        e.stopPropagation()
+        setIsDragging(false)
+    }, [])
+
+    const handleDrop = useCallback((e: React.DragEvent) => {
+        e.preventDefault()
+        e.stopPropagation()
+        setIsDragging(false)
+
+        const file = e.dataTransfer.files[0]
+        if (!file) return
+
+        const reader = new FileReader()
+        reader.onload = (event) => {
+            const text = event.target?.result as string
+            parseCSV(text)
+        }
+        reader.readAsText(file)
+    }, [parseCSV])
 
     const validRecipients = recipients.filter(r => r.address && r.amount && parseFloat(r.amount) > 0)
     const totalAmount = validRecipients.reduce((sum, r) => sum + (parseFloat(r.amount) || 0), 0)
@@ -56,12 +112,21 @@ export function BatchSend() {
     const handleSend = async () => {
         if (validRecipients.length === 0) return
 
+        // Validate addresses
+        const error = validateRecipients(validRecipients)
+        if (error) {
+            setValidationError(error)
+            return
+        }
+        setValidationError(undefined)
+
         let calls
         if (tokenType === 'native') {
             calls = buildNativeCalls(validRecipients)
         } else {
             if (!tokenAddress) return
-            calls = buildERC20Calls(tokenAddress, validRecipients)
+            const decimals = await readTokenDecimals(tokenAddress)
+            calls = buildERC20Calls(tokenAddress, validRecipients, decimals)
         }
 
         await executeBatch(calls)
@@ -146,12 +211,23 @@ export function BatchSend() {
                     {recipients.length > 1 && (
                         <button
                             className="btn btn--sm btn--danger"
-                            onClick={() => setRecipients([{ address: '', amount: '' }])}
+                            onClick={() => {
+                                setRecipients([{ address: '', amount: '' }])
+                                setValidationError(undefined)
+                                setCsvInfo(undefined)
+                            }}
                         >
                             Clear All
                         </button>
                     )}
                 </div>
+
+                {/* CSV Import Info */}
+                {csvInfo && (
+                    <div className="mb-md" style={{ fontFamily: 'var(--font-mono)', fontSize: '0.75rem', color: 'var(--success)' }}>
+                        ✓ {csvInfo}
+                    </div>
+                )}
 
                 <div className="table-wrap">
                     <table>
@@ -203,15 +279,41 @@ export function BatchSend() {
                 </div>
             </div>
 
-            {/* CSV Info */}
-            <div className="drop-zone mb-lg" onClick={() => fileInputRef.current?.click()}>
+            {/* CSV Drop Zone — with real drag-and-drop */}
+            <div
+                className={`drop-zone mb-lg ${isDragging ? 'active' : ''}`}
+                onClick={() => fileInputRef.current?.click()}
+                onDragOver={handleDragOver}
+                onDragEnter={handleDragOver}
+                onDragLeave={handleDragLeave}
+                onDrop={handleDrop}
+            >
                 <div className="drop-zone__text">
-                    Drop CSV file here or click to upload<br />
-                    <span style={{ fontSize: '0.65rem', color: 'var(--text-muted)' }}>
-                        Format: address,amount (one per line)
-                    </span>
+                    {isDragging ? (
+                        'Drop CSV file here'
+                    ) : (
+                        <>
+                            Drop CSV file here or click to upload<br />
+                            <span style={{ fontSize: '0.65rem', color: 'var(--text-muted)' }}>
+                                Format: address,amount (one per line)
+                            </span>
+                        </>
+                    )}
                 </div>
             </div>
+
+            {/* Validation Error */}
+            {validationError && (
+                <div className="tx-status tx-status--error animate-in mb-lg">
+                    <div className="tx-status__icon">⚠</div>
+                    <div className="tx-status__content">
+                        <div className="tx-status__title">Validation Error</div>
+                        <div style={{ fontFamily: 'var(--font-mono)', fontSize: '0.75rem', color: 'var(--error)', marginTop: '4px' }}>
+                            {validationError}
+                        </div>
+                    </div>
+                </div>
+            )}
 
             {/* Transaction Status */}
             <TransactionStatus

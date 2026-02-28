@@ -1,6 +1,6 @@
 import { useState, useCallback } from 'react'
 import { useAccount, useWalletClient, usePublicClient } from 'wagmi'
-import { encodeFunctionData, parseAbi } from 'viem'
+import { encodeFunctionData, parseAbi, parseEther, parseUnits, isAddress } from 'viem'
 import { monadTestnet } from '../config/wagmi'
 
 // BatchCallDelegation ABI (the contract EOA delegates to)
@@ -9,9 +9,10 @@ const BATCH_ABI = parseAbi([
     'function execute((address to, uint256 value, bytes data)[] calls)',
 ])
 
-// ERC-20 transfer ABI
+// ERC-20 ABI
 const ERC20_ABI = parseAbi([
     'function transfer(address to, uint256 amount) returns (bool)',
+    'function decimals() view returns (uint8)',
 ])
 
 export interface BatchCall {
@@ -26,10 +27,28 @@ export interface Recipient {
 }
 
 // Deployed BatchCallDelegation contract address on Monad Testnet
-// This will be updated after deployment
+// Will be updated after deployment
 export const BATCH_DELEGATION_ADDRESS = '0x0000000000000000000000000000000000000000' as `0x${string}`
 
 export type TxStatus = 'idle' | 'signing' | 'pending' | 'success' | 'error'
+
+/**
+ * Validate that all recipients have valid Ethereum addresses
+ */
+export function validateRecipients(recipients: Recipient[]): string | null {
+    for (let i = 0; i < recipients.length; i++) {
+        const r = recipients[i]
+        if (!r.address || !r.amount) continue
+        if (!isAddress(r.address)) {
+            return `Row ${i + 1}: Invalid address "${r.address.slice(0, 10)}..."`
+        }
+        const amount = parseFloat(r.amount)
+        if (isNaN(amount) || amount <= 0) {
+            return `Row ${i + 1}: Invalid amount "${r.amount}"`
+        }
+    }
+    return null
+}
 
 export function useEIP7702() {
     const { address } = useAccount()
@@ -46,21 +65,21 @@ export function useEIP7702() {
         setTxError(undefined)
     }, [])
 
-    // Build batch calls for native MON transfers
+    // Build batch calls for native MON transfers (uses parseEther for precision)
     const buildNativeCalls = useCallback((recipients: Recipient[]): BatchCall[] => {
         return recipients
-            .filter(r => r.address && r.amount)
+            .filter(r => r.address && r.amount && parseFloat(r.amount) > 0)
             .map(r => ({
                 to: r.address as `0x${string}`,
-                value: BigInt(Math.floor(parseFloat(r.amount) * 1e18)),
+                value: parseEther(r.amount),
                 data: '0x' as `0x${string}`,
             }))
     }, [])
 
     // Build batch calls for ERC-20 transfers
-    const buildERC20Calls = useCallback((tokenAddress: string, recipients: Recipient[]): BatchCall[] => {
+    const buildERC20Calls = useCallback((tokenAddress: string, recipients: Recipient[], decimals: number = 18): BatchCall[] => {
         return recipients
-            .filter(r => r.address && r.amount)
+            .filter(r => r.address && r.amount && parseFloat(r.amount) > 0)
             .map(r => ({
                 to: tokenAddress as `0x${string}`,
                 value: 0n,
@@ -69,19 +88,37 @@ export function useEIP7702() {
                     functionName: 'transfer',
                     args: [
                         r.address as `0x${string}`,
-                        BigInt(Math.floor(parseFloat(r.amount) * 1e18)),
+                        parseUnits(r.amount, decimals),
                     ],
                 }),
             }))
     }, [])
 
+    // Read ERC-20 decimals from on-chain
+    const readTokenDecimals = useCallback(async (tokenAddress: string): Promise<number> => {
+        if (!publicClient) return 18
+        try {
+            const decimals = await publicClient.readContract({
+                address: tokenAddress as `0x${string}`,
+                abi: ERC20_ABI,
+                functionName: 'decimals',
+            })
+            return Number(decimals)
+        } catch {
+            return 18 // default fallback
+        }
+    }, [publicClient])
+
     // Execute batch using EIP-7702
-    // In a real EIP-7702 flow:
-    // 1. Sign authorization to delegate EOA to BatchCallDelegation contract
-    // 2. Send tx with authorizationList + call execute(calls[])
     const executeBatch = useCallback(async (calls: BatchCall[]) => {
         if (!walletClient || !address || !publicClient) {
             setTxError('Wallet not connected')
+            setTxStatus('error')
+            return
+        }
+
+        if (BATCH_DELEGATION_ADDRESS === '0x0000000000000000000000000000000000000000') {
+            setTxError('Contract not deployed yet. Deploy the contract and update the address.')
             setTxStatus('error')
             return
         }
@@ -94,7 +131,6 @@ export function useEIP7702() {
             const totalValue = calls.reduce((sum, c) => sum + c.value, 0n)
 
             // EIP-7702 Authorization: delegate EOA to BatchCallDelegation contract
-            // The walletClient.signAuthorization is the experimental EIP-7702 action
             const authorization = await walletClient.signAuthorization({
                 contractAddress: BATCH_DELEGATION_ADDRESS,
             })
@@ -146,6 +182,8 @@ export function useEIP7702() {
         executeBatch,
         buildNativeCalls,
         buildERC20Calls,
+        readTokenDecimals,
+        validateRecipients: validateRecipients,
         reset,
         explorerUrl: monadTestnet.blockExplorers.default.url,
     }
