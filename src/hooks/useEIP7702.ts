@@ -27,8 +27,7 @@ export interface Recipient {
 }
 
 // Deployed BatchCallDelegation contract address on Monad Testnet
-// Will be updated after deployment
-export const BATCH_DELEGATION_ADDRESS = '0x0000000000000000000000000000000000000000' as `0x${string}`
+export const BATCH_DELEGATION_ADDRESS = '0xC2490c748577e9ECB94d7519c3DfF0AAfb54858C' as `0x${string}`
 
 export type TxStatus = 'idle' | 'signing' | 'pending' | 'success' | 'error'
 

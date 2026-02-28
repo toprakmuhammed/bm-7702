@@ -1,0 +1,12 @@
+Deploying BatchCallDelegation to Monad Testnet...
+
+Deployer: 0x8c62514BE7B78c76AcCE81176a901D346BD59E91
+Balance: 49.87854566 MON
+
+BatchCallDelegation deployed to: 0xC2490c748577e9ECB94d7519c3DfF0AAfb54858C
+MockERC20 deployed to: 0xB082CCd0F7C5485496F9FEa8372f79992a4Af8CB
+
+--- Deployment Complete ---
+
+Update BATCH_DELEGATION_ADDRESS in src/hooks/useEIP7702.ts:
+  export const BATCH_DELEGATION_ADDRESS = '0xC2490c748577e9ECB94d7519c3DfF0AAfb54858C' as `0x${string}`
