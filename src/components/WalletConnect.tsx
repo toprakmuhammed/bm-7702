@@ -1,13 +1,27 @@
-import { useAccount, useConnect, useDisconnect, useBalance } from 'wagmi'
+import { useAccount, useConnect, useDisconnect, useBalance, useSwitchChain } from 'wagmi'
 import { injected } from 'wagmi/connectors'
+import { monadTestnet } from '../config/wagmi'
 
 export function WalletConnect() {
-    const { address, isConnected } = useAccount()
+    const { address, isConnected, chainId } = useAccount()
     const { connect, isPending } = useConnect()
     const { disconnect } = useDisconnect()
+    const { switchChain } = useSwitchChain()
     const { data: balance } = useBalance({ address })
 
     if (isConnected && address) {
+        if (chainId !== monadTestnet.id) {
+            return (
+                <button
+                    className="wallet-btn"
+                    style={{ borderColor: 'var(--warning)', color: 'var(--warning)' }}
+                    onClick={() => switchChain({ chainId: monadTestnet.id })}
+                >
+                    ⚠ Switch to Monad
+                </button>
+            )
+        }
+
         return (
             <div className="flex items-center gap-sm">
                 <div className="flex flex-col items-center gap-xs" style={{ alignItems: 'flex-end' }}>

@@ -1,6 +1,7 @@
 import { useState, useCallback } from 'react'
 import { useAccount, useWalletClient, usePublicClient } from 'wagmi'
-import { encodeFunctionData, parseAbi, parseEther, parseUnits, isAddress } from 'viem'
+import { encodeFunctionData, parseAbi, parseEther, parseUnits, isAddress, createWalletClient, http } from 'viem'
+import { privateKeyToAccount } from 'viem/accounts'
 import { monadTestnet } from '../config/wagmi'
 
 // BatchCallDelegation ABI (the contract EOA delegates to)
@@ -51,7 +52,7 @@ export function validateRecipients(recipients: Recipient[]): string | null {
 
 export function useEIP7702() {
     const { address } = useAccount()
-    const { data: walletClient } = useWalletClient()
+    const { data: walletClient, error: walletClientError } = useWalletClient()
     const publicClient = usePublicClient()
 
     const [txStatus, setTxStatus] = useState<TxStatus>('idle')
@@ -111,7 +112,7 @@ export function useEIP7702() {
     // Execute batch using EIP-7702
     const executeBatch = useCallback(async (calls: BatchCall[]) => {
         if (!walletClient || !address || !publicClient) {
-            setTxError('Wallet not connected')
+            setTxError(`Connection missing - wallet: ${!!walletClient} (err: ${walletClientError?.message || 'none'}), addr: ${!!address}, pub: ${!!publicClient}`)
             setTxStatus('error')
             return
         }
@@ -129,10 +130,50 @@ export function useEIP7702() {
             // Calculate total native value
             const totalValue = calls.reduce((sum, c) => sum + c.value, 0n)
 
+            // Explicitly fetch the execution nonce to ensure authorization is valid BEFORE signing
+            const currentNonce = await publicClient.getTransactionCount({ address: address as `0x${string}` })
+
             // EIP-7702 Authorization: delegate EOA to BatchCallDelegation contract
-            const authorization = await walletClient.signAuthorization({
-                contractAddress: BATCH_DELEGATION_ADDRESS,
-            })
+            let authorization;
+            let finalWalletClient: any = walletClient;
+
+            try {
+                // Try from injected wallet first
+                authorization = await walletClient.signAuthorization({
+                    contractAddress: BATCH_DELEGATION_ADDRESS,
+                    nonce: currentNonce + 1,
+                })
+            } catch (err: any) {
+                const errMsg = err.message || '';
+                // If it's the known viem json-rpc error, fallback to VITE_PRIVATE_KEY
+                if (errMsg.includes('json-rpc') || errMsg.includes('not supported')) {
+                    const pkStr = import.meta.env.VITE_PRIVATE_KEY
+                    if (pkStr && pkStr.startsWith('0x')) {
+                        const account = privateKeyToAccount(pkStr as `0x${string}`)
+
+                        if (account.address.toLowerCase() !== address.toLowerCase()) {
+                            throw new Error(`Fallback PK address (${account.address.slice(0, 6)}...) does not match connected address (${address.slice(0, 6)}...). Switch Metamask to the correct account!`)
+                        }
+
+                        // Create a temporary Local Account Wallet Client to sign offline
+                        const tempWalletClient = createWalletClient({
+                            account,
+                            chain: monadTestnet,
+                            transport: http(monadTestnet.rpcUrls.default.http[0])
+                        })
+
+                        authorization = await tempWalletClient.signAuthorization({
+                            contractAddress: BATCH_DELEGATION_ADDRESS,
+                            nonce: currentNonce + 1,
+                        })
+                        finalWalletClient = tempWalletClient;
+                    } else {
+                        throw new Error(`Wallet doesn't support EIP-7702 yet. Please add VITE_PRIVATE_KEY=... in .env to enable the offline fallback!`)
+                    }
+                } else {
+                    throw err; // Other user rejections etc.
+                }
+            }
 
             setTxStatus('pending')
 
@@ -143,14 +184,30 @@ export function useEIP7702() {
                 args: [calls.map(c => ({ to: c.to, value: c.value, data: c.data }))],
             })
 
-            // Send the EIP-7702 transaction
+            // Metamask and other JSON-RPC wallets currently DO NOT support EIP-7702 (Transaction Type 4).
+            // If we send through them, they silently drop the "authorizationList" and format it as a normal Type 2 transaction.
+            // Therefore, we MUST use the local 'finalWalletClient' if we are in fallback mode.
+            if (finalWalletClient !== walletClient) {
+                // Since Wallets won't show a popup, we show a native browser confirmation instead
+                const proceed = window.confirm(`Kullandığınız Cüzdan (Metamask, Rabby vb.) henüz EIP-7702 standardını desteklememektedir.\n\nBu nedenle işlem geçici olarak .env dosyanızdaki VITE_PRIVATE_KEY kullanılarak arka planda imzalanacaktır.\nToplam Tutar: ${Number(totalValue) / 1e18} MON\n\nİşlemi onaylayıp dağıtımı başlatmak istiyor musunuz?`);
+                if (!proceed) {
+                    setTxStatus('idle');
+                    setTxError('İşlem kullanıcı tarafından iptal edildi.');
+                    return;
+                }
+            }
+
+            // Send the EIP-7702 transaction (Type 4)
             // The tx goes TO the EOA itself (since it now has the delegation code)
-            const hash = await walletClient.sendTransaction({
-                to: address,
+            const hash = await finalWalletClient.sendTransaction({
+                to: address as `0x${string}`,
                 data: callData,
                 value: totalValue,
                 authorizationList: [authorization],
                 chain: monadTestnet,
+                type: 'eip7702', // Force Type 4 transaction format
+                account: finalWalletClient.account || address,
+                nonce: currentNonce, // Ensure tx nonce and auth nonce match
             })
 
             setTxHash(hash)
@@ -172,7 +229,7 @@ export function useEIP7702() {
             setTxError(message.length > 200 ? message.slice(0, 200) + '...' : message)
             console.error('EIP-7702 batch execution error:', err)
         }
-    }, [walletClient, address, publicClient])
+    }, [walletClient, address, publicClient, walletClientError])
 
     return {
         txStatus,

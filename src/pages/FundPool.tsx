@@ -1,7 +1,8 @@
 import { useState, useCallback } from 'react'
-import { useAccount } from 'wagmi'
+import { useAccount, useSwitchChain } from 'wagmi'
 import { useEIP7702, Recipient, validateRecipients } from '../hooks/useEIP7702'
 import { TransactionStatus } from '../components/TransactionStatus'
+import { monadTestnet } from '../config/wagmi'
 
 interface PoolMember {
     address: string
@@ -11,8 +12,10 @@ interface PoolMember {
 type DistMode = 'equal' | 'custom'
 
 export function FundPool() {
-    const { isConnected } = useAccount()
+    const { isConnected, chainId } = useAccount()
+    const { switchChain } = useSwitchChain()
     const { txStatus, txHash, txError, executeBatch, buildNativeCalls, buildERC20Calls, readTokenDecimals, reset, explorerUrl } = useEIP7702()
+
 
     const [poolName, setPoolName] = useState('')
     const [totalBudget, setTotalBudget] = useState('')
@@ -372,6 +375,14 @@ export function FundPool() {
                 {txStatus === 'success' || txStatus === 'error' ? (
                     <button className="btn btn--primary btn--lg btn--full" onClick={reset}>
                         New Distribution
+                    </button>
+                ) : isConnected && chainId !== monadTestnet.id ? (
+                    <button
+                        className="btn btn--lg btn--full"
+                        style={{ borderColor: 'var(--warning)', color: 'var(--warning)' }}
+                        onClick={() => switchChain({ chainId: monadTestnet.id })}
+                    >
+                        ⚠ Switch Network to Monad Testnet
                     </button>
                 ) : (
                     <button
