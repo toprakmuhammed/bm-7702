@@ -1,7 +1,8 @@
-# BM-7702 — Batch Token Distribution on Monad
+# BM-7702 — Next-Gen Transaction Infrastructure on Monad (EIP-7702)
 
-One-click batch token distribution for founders, hackathon organizers, and distributors — powered by EIP-7702 on Monad.
+BM-7702 is more than just a one-click batch token distribution tool for founders and hackathon organizers. It is a powerful infrastructure built on **EIP-7702** and **Monad** that completely eliminates transaction friction and barriers. 
 
+By allowing Externally Owned Accounts (EOAs) to temporarily execute smart contract payloads, this project bypasses the endless transaction approval prompts that bottleneck user experience. Whether it's removing transaction hurdles in blockchain gaming, enabling gasless sponsorships, or ensuring you never miss a top-selling opportunity during fast-paced token sales due to confirmation delays, BM-7702 redefines seamless on-chain interactions.
 ## Quick Start
 
 ```bash

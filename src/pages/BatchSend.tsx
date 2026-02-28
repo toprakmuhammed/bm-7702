@@ -20,6 +20,7 @@ export function BatchSend() {
     const [validationError, setValidationError] = useState<string>()
     const [csvInfo, setCsvInfo] = useState<string>()
     const [isDragging, setIsDragging] = useState(false)
+    const [globalAmount, setGlobalAmount] = useState('')
 
     const addRow = () => {
         setRecipients(prev => [...prev, { address: '', amount: '' }])
@@ -196,32 +197,56 @@ export function BatchSend() {
             {/* Recipients Table */}
             <div className="section">
                 <div className="section__title">Recipients</div>
-                <div className="flex gap-sm mb-md">
-                    <button className="btn btn--sm" onClick={addRow}>
-                        + Add Row
-                    </button>
-                    <button className="btn btn--sm" onClick={() => fileInputRef.current?.click()}>
-                        ↑ Import CSV
-                    </button>
-                    <input
-                        ref={fileInputRef}
-                        type="file"
-                        accept=".csv,.txt"
-                        onChange={handleCSVImport}
-                        style={{ display: 'none' }}
-                    />
-                    {recipients.length > 1 && (
+                <div className="flex gap-sm mb-md" style={{ justifyContent: 'space-between', flexWrap: 'wrap' }}>
+                    <div className="flex gap-sm">
+                        <button className="btn btn--sm" onClick={addRow}>
+                            + Add Row
+                        </button>
+                        <button className="btn btn--sm" onClick={() => fileInputRef.current?.click()}>
+                            ↑ Import CSV
+                        </button>
+                        <input
+                            ref={fileInputRef}
+                            type="file"
+                            accept=".csv,.txt"
+                            onChange={handleCSVImport}
+                            style={{ display: 'none' }}
+                        />
+                        {recipients.length > 1 && (
+                            <button
+                                className="btn btn--sm btn--danger"
+                                onClick={() => {
+                                    setRecipients([{ address: '', amount: '' }])
+                                    setValidationError(undefined)
+                                    setCsvInfo(undefined)
+                                }}
+                            >
+                                Clear All
+                            </button>
+                        )}
+                    </div>
+
+                    <div className="flex gap-sm">
+                        <input
+                            className="input"
+                            style={{ width: '120px', padding: '0 8px', height: '32px' }}
+                            type="text"
+                            placeholder="Amount..."
+                            value={globalAmount}
+                            onChange={(e) => setGlobalAmount(e.target.value)}
+                        />
                         <button
-                            className="btn btn--sm btn--danger"
+                            className="btn btn--sm"
+                            style={{ borderColor: 'var(--primary)', color: 'var(--primary)' }}
                             onClick={() => {
-                                setRecipients([{ address: '', amount: '' }])
+                                if (!globalAmount) return
+                                setRecipients(prev => prev.map(r => ({ ...r, amount: globalAmount })))
                                 setValidationError(undefined)
-                                setCsvInfo(undefined)
                             }}
                         >
-                            Clear All
+                            Apply to All
                         </button>
-                    )}
+                    </div>
                 </div>
 
                 {/* CSV Import Info */}
